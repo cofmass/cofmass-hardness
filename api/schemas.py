@@ -8,8 +8,18 @@ from pydantic import BaseModel, Field
 
 class ChatRequest(BaseModel):
     user_id: str = "u-1"
+    tenant_id: str | None = None
     thread_id: str = "t-1"
     question: str = Field(min_length=1)
+
+
+class ChatStreamRequest(ChatRequest):
+    """SSE 流式请求；字段与 /chat/invoke 一致（阶段三）。"""
+
+
+class StreamEvent(BaseModel):
+    event: str
+    payload: dict[str, Any]
 
 
 class ChatResponse(BaseModel):
@@ -26,6 +36,7 @@ class SkillsGetRequest(BaseModel):
 
 class SkillsPutRequest(BaseModel):
     user_id: str = "u-1"
+    tenant_id: str | None = None
     preferences: dict[str, Any] | None = None
     enabled: list[str] | None = None
 

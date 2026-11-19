@@ -1,7 +1,9 @@
-"""图状态 schema（阶段一，不含 tool_calls —— 留阶段三）。
+"""图状态 schema（阶段一 + 阶段三 tool 字段）。
 
 用 TypedDict 作为 StateGraph schema：每个键声明 reducer / 默认值语义，
 避免裸 dict 架构下未声明键在节点间被丢弃。
+阶段三启用预留的 tool_calls / tool_results（messages 用 add_messages reducer），
+新增 tool_iterations（循环收敛计数）与 memory_candidates（自动抽取候选）。
 """
 from __future__ import annotations
 
@@ -19,11 +21,17 @@ def _replace(_old, new):
 class AgentState(TypedDict):
     messages: Annotated[list[AnyMessage], add_messages]
     user_id: Annotated[str, _replace]
+    tenant_id: Annotated[str | None, _replace]  # 阶段二 ACL 上下文
     thread_id: Annotated[str, _replace]
     context: Annotated[list[dict], _replace]
     skill_ctx: Annotated[dict, _replace]
     answer: Annotated[str, _replace]
     written: Annotated[dict, _replace]
+    # ---- 阶段三 ----
+    tool_calls: Annotated[list[dict], _replace]
+    tool_results: Annotated[list[dict], _replace]
+    tool_iterations: Annotated[int, _replace]
+    memory_candidates: Annotated[list[dict], _replace]
 
 
 def get_text_input(state: dict) -> str:
