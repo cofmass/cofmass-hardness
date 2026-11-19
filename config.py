@@ -31,6 +31,14 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(BASE_DIR / ".env")
 
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
 # ---- 数据库 ----
 # 阶段一正式载体为 PostgreSQL + pgvector；本机未装 PG 时留空即降级 SQLite（脚手架，不计入阶段一 DoD）。
 PG_DSN = os.getenv("HARDNESS_PG_DSN", "").strip()
@@ -55,10 +63,10 @@ RAG_TOP_K = int(os.getenv("HARDNESS_RAG_TOP_K", "3"))
 # 存储后端：空表示按 DSN 自动推导（有 DSN→pgstore，无→sql）；sql 为回退开关。
 STORE_BACKEND = os.getenv("HARDNESS_STORE_BACKEND", "").strip().lower()
 # ACL 上下文下推：关掉则保持阶段一「仅 user_id 请求体过滤」行为。
-STORE_FILTER_ENABLED = os.getenv("HARDNESS_STORE_FILTER_ENABLED", "true").lower() not in ("0", "false", "no")
+STORE_FILTER_ENABLED = _env_bool("HARDNESS_STORE_FILTER_ENABLED", True)
 # 中文分词实测：Docker PG16 无 zhparser/pgroonga，仅 simple（按字符/空格切分）——
 # 混合检索因此标记为「降级」：英文/数字召回有效，中文召回有限但不会比纯向量更差（RRF 融合）。
-HYBRID_SEARCH_ENABLED = os.getenv("HARDNESS_HYBRID_SEARCH_ENABLED", "true").lower() not in ("0", "false", "no")
+HYBRID_SEARCH_ENABLED = _env_bool("HARDNESS_HYBRID_SEARCH_ENABLED", True)
 HYBRID_TOKENIZER = os.getenv("HARDNESS_HYBRID_TOKENIZER", "simple")  # 定案：simple（G2 实测降级）
 HYBRID_RRF_K = int(os.getenv("HARDNESS_HYBRID_RRF_K", "60"))
 HNSW_EF_SEARCH = int(os.getenv("HARDNESS_HNSW_EF_SEARCH", "100"))
@@ -82,17 +90,11 @@ API_CORS_ORIGINS = [
 # ---- 治理占位（阶段三/四启用）----
 MAX_CONTEXT_TOKENS = int(os.getenv("HARDNESS_MAX_CONTEXT_TOKENS", "4096"))
 # 阶段四：RLS 启动校验开关（生产必须 true；本地无 PG 的 SQLite 脚手架自动跳过角色检查）。
-RLS_ENFORCED = os.getenv("HARDNESS_RLS_ENFORCED", "true").lower() not in ("0", "false", "no", "off")
+RLS_ENFORCED = _env_bool("HARDNESS_RLS_ENFORCED", True)
 # 阶段四：治理审计日志（TTL 清理 / 向量重建等运维动作追加写）。
 AUDIT_LOG_PATH = os.getenv("HARDNESS_AUDIT_LOG", str(DATA_DIR / "governance_audit.log"))
 
 # ---- 阶段三：工具 / 自动记忆 / SSE ----
-def _env_bool(name: str, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None or raw.strip() == "":
-        return default
-    return raw.strip().lower() not in ("0", "false", "no", "off")
-
 TOOLS_ENABLED = _env_bool("HARDNESS_TOOLS_ENABLED", False)          # 默认关闭：保留阶段一顺序图回归路径
 TOOL_MAX_ITERATIONS = int(os.getenv("HARDNESS_TOOL_MAX_ITERATIONS", "5"))
 AUTO_MEMORY_ENABLED = _env_bool("HARDNESS_AUTO_MEMORY_ENABLED", False)  # 默认关闭：按用户灰度
