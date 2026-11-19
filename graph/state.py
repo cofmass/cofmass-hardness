@@ -32,6 +32,7 @@ class AgentState(TypedDict):
     tool_results: Annotated[list[dict], _replace]
     tool_iterations: Annotated[int, _replace]
     memory_candidates: Annotated[list[dict], _replace]
+    budget_meta: Annotated[dict, _replace]  # 阶段四 token 预算裁剪摘要
 
 
 def get_text_input(state: dict) -> str:

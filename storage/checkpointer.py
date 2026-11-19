@@ -25,3 +25,16 @@ def make_saver(dsn: str | None = None):
     saver = PostgresSaver(conn)
     saver.setup()
     return saver, conn.close
+
+
+def make_async_saver(dsn: str | None = None):
+    """阶段三：PG 下创建 AsyncPostgresSaver；不可用抛异常由调用方回退 to_thread。"""
+    if not PG_DSN:
+        return None, None
+
+    import psycopg
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+    conn = psycopg.AsyncConnection.connect(dsn or PG_DSN, autocommit=True)
+    saver = AsyncPostgresSaver(conn)
+    return saver, conn.close

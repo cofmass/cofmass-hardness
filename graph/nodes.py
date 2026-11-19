@@ -15,8 +15,9 @@ import json
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
-from config import EMB_MODEL, TOOL_MAX_ITERATIONS, TOOLS_ENABLED
+from config import EMB_MODEL, MAX_CONTEXT_TOKENS, TOOL_MAX_ITERATIONS, TOOLS_ENABLED
 from graph.state import AgentState, get_text_input as _input_text
+from token_budget import trim_to_budget
 
 
 def _acl_ns(state: dict, area: str) -> tuple[str, ...]:
@@ -100,14 +101,27 @@ def generate(state: dict, *, runtime: dict | None = None) -> dict:
         snippets = "\n\n".join(f"[资料{i+1}] {h['content']}" for i, h in enumerate(context))
         parts.append("以下是参考资料，回答时优先依据：\n" + snippets)
 
-    messages = [SystemMessage(content="\n".join(parts))] + list(state.get("messages", []))
+    raw_messages = [SystemMessage(content="\n".join(parts))] + list(state.get("messages", []))
+    trimmed = trim_to_budget(
+        raw_messages,
+        context=context,
+        tool_results=state.get("tool_results") or [],
+        max_tokens=MAX_CONTEXT_TOKENS,
+    )
+    messages = trimmed.messages
     iterations = int(state.get("tool_iterations") or 0)
     tools_on = bool(rt.get("tools_enabled", TOOLS_ENABLED))
     # 循环超限：降级为无工具回答，避免死循环（DoD：收敛且不崩）。
     if tools_on and iterations >= TOOL_MAX_ITERATIONS:
         parts.append("工具调用次数已达上限，请直接基于已有信息回答，不要再调用工具。")
         tools_on = False
-        messages = [SystemMessage(content="\n".join(parts))] + list(state.get("messages", []))
+        trimmed = trim_to_budget(
+            [SystemMessage(content="\n".join(parts))] + list(state.get("messages", [])),
+            context=context,
+            tool_results=state.get("tool_results") or [],
+            max_tokens=MAX_CONTEXT_TOKENS,
+        )
+        messages = trimmed.messages
 
     call_llm = llm
     if tools_on:
@@ -129,6 +143,7 @@ def generate(state: dict, *, runtime: dict | None = None) -> dict:
         "answer": answer,
         "tool_calls": tool_calls,
         "messages": list(state.get("messages", [])) + [resp],
+        "budget_meta": trimmed.as_meta(),
     }
     if tool_calls:
         out["tool_iterations"] = iterations + 1

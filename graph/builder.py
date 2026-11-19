@@ -129,6 +129,7 @@ class Agent:
             "thread_id": thread_id,
             "step": len(result.get("messages", [])),
             "tool_results": result.get("tool_results", []),
+            "budget_meta": result.get("budget_meta", {}),
         }
 
     def history(self, thread_id: str) -> list[dict]:

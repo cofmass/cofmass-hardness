@@ -11,28 +11,39 @@ from fastapi.responses import JSONResponse
 
 import storage as store
 from api.routes import router
-from config import API_CORS_ORIGINS, API_VERSION
+from config import API_CORS_ORIGINS, API_VERSION, RLS_ENFORCED
 from graph.builder import Agent
-from providers.factory import get_chat_model, get_embeddings
+from providers import factory as provider_factory
 from storage.checkpointer import make_saver
+from storage.session_context import check_app_role_if_pg
 
 log = logging.getLogger("hardness.api")
+
+
+def _verify_rls_role() -> dict | None:
+    """PG 模式下校验应用角色；SQLite 脚手架跳过。"""
+    if not RLS_ENFORCED:
+        log.warning("RLS_ENFORCED=false：跳过 DB 角色校验（仅允许本地开发）")
+        return None
+    return check_app_role_if_pg(store.connect)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # 应用级长生命周期连接 + saver；请求内禁止 with 包裹或关闭连接。
+    _verify_rls_role()
     conn = store.connect()
     store.setup(conn)
     saver, _ = make_saver()
     app.state.agent = Agent(
         conn,
         saver,
-        llm=get_chat_model(),
-        embeddings=get_embeddings(),
+        llm=provider_factory.get_chat_model(),
+        embeddings=provider_factory.get_embeddings(),
         storage_module=store,
     )
-    log.info("agent ready: backend=%s", store.backend_name())
+    app.state.provider = getattr(provider_factory, "PROVIDER", "ollama")
+    log.info("agent ready: backend=%s provider=%s", store.backend_name(), app.state.provider)
     try:
         yield
     finally:

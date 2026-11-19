@@ -81,6 +81,10 @@ API_CORS_ORIGINS = [
 
 # ---- 治理占位（阶段三/四启用）----
 MAX_CONTEXT_TOKENS = int(os.getenv("HARDNESS_MAX_CONTEXT_TOKENS", "4096"))
+# 阶段四：RLS 启动校验开关（生产必须 true；本地无 PG 的 SQLite 脚手架自动跳过角色检查）。
+RLS_ENFORCED = os.getenv("HARDNESS_RLS_ENFORCED", "true").lower() not in ("0", "false", "no", "off")
+# 阶段四：治理审计日志（TTL 清理 / 向量重建等运维动作追加写）。
+AUDIT_LOG_PATH = os.getenv("HARDNESS_AUDIT_LOG", str(DATA_DIR / "governance_audit.log"))
 
 # ---- 阶段三：工具 / 自动记忆 / SSE ----
 def _env_bool(name: str, default: bool) -> bool:
