@@ -13,7 +13,14 @@ from config import PG_DSN
 
 
 def make_saver(dsn: str | None = None):
-    """返回 (saver, close_fn)；PG 不可用时回退内存 saver（仅验证图）。"""
+    """返回 (saver, close_fn)；PG 不可用时回退内存 saver（仅验证图）。
+
+    `HARDNESS_STORE_BACKEND=sql` 时强制用 InMemorySaver：测试/无 PG 环境不应连
+    真实 PG saver，否则 thread_id 会跨测试残留 checkpoint 造成状态污染。
+    """
+    import os
+    if os.getenv("HARDNESS_STORE_BACKEND", "").strip().lower() == "sql":
+        return InMemorySaver(), lambda: None
     if not PG_DSN:
         return InMemorySaver(), lambda: None
 

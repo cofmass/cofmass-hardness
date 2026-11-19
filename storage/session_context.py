@@ -22,12 +22,17 @@ log = logging.getLogger("hardness.storage.session_context")
 
 def check_role(conn) -> dict:
     """校验当前 PG 连接角色；超级用户或 BYPASSRLS 抛 RuntimeError（复用于启动检测）。"""
-    with conn.cursor() as cur:
+    cur = conn.cursor()
+    try:
         cur.execute("""
             SELECT rolname, rolsuper, rolbypassrls
             FROM pg_roles WHERE rolname = current_user
         """)
         row = cur.fetchone()
+    finally:
+        close = getattr(cur, "close", None)
+        if close:
+            close()
     if row is None:
         raise RuntimeError("无法查询当前数据库角色")
     if isinstance(row, dict):
@@ -44,12 +49,16 @@ def check_role(conn) -> dict:
 
 
 def check_app_role_if_pg(connect_fn) -> dict | None:
-    """PG 连接则返回角色检查结果，非 PG（sqlite）返回 None；违规抛 RuntimeError。"""
-    from config import use_postgres
-    if not use_postgres():
-        return None
+    """PG 连接则返回角色检查结果，非 PG（sqlite）返回 None；违规抛 RuntimeError。
+
+    以连接自身属性判定后端（与 session_context 一致），而非全局 config：
+    测试用 sqlite 连接 + 配置了 PG DSN 时，不能误把 sqlite 当 PG 跑角色校验。
+    """
     conn = connect_fn()
     try:
+        # psycopg 连接暴露 autocommit 属性；sqlite3 连接没有 —— 据此识别 PG。
+        if getattr(conn, "autocommit", None) is None:
+            return None
         return check_role(conn)
     finally:
         conn.close()

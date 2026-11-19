@@ -15,6 +15,7 @@ import json
 
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
 
+import config
 from config import EMB_MODEL, MAX_CONTEXT_TOKENS, TOOL_MAX_ITERATIONS, TOOLS_ENABLED
 from graph.state import AgentState, get_text_input as _input_text
 from token_budget import trim_to_budget
@@ -84,6 +85,33 @@ def retrieve(state: dict, *, runtime: dict | None = None) -> dict:
     return {"context": hits}
 
 
+def _tool_results_from_messages(messages: list) -> list[dict]:
+    """从 ToolMessage 还原工具执行结果：{name, status, result}。
+
+    LangGraph 的 ToolNode 只把结果写回 messages（ToolMessage），不会写 tool_results，
+    因此在这里按消息顺序还原，供 API / SSE / token_budget 消费。
+    """
+    results: list[dict] = []
+    for m in messages or []:
+        if isinstance(m, ToolMessage):
+            results.append({
+                "name": getattr(m, "name", "") or "",
+                "status": getattr(m, "status", None) or "success",
+                "result": m.content,
+                "tool_call_id": getattr(m, "tool_call_id", None),
+            })
+    return results
+
+
+def _strip_tool_calls(resp):
+    """降级路径：剥离残留 tool_calls，避免 tools_condition 再次进入 tools 分支死循环。"""
+    if not getattr(resp, "tool_calls", None):
+        return resp
+    if isinstance(resp, AIMessage):
+        return AIMessage(content=resp.content or "")
+    return resp
+
+
 def generate(state: dict, *, runtime: dict | None = None) -> dict:
     rt = runtime or {}
     llm = rt["llm"]
@@ -101,24 +129,32 @@ def generate(state: dict, *, runtime: dict | None = None) -> dict:
         snippets = "\n\n".join(f"[资料{i+1}] {h['content']}" for i, h in enumerate(context))
         parts.append("以下是参考资料，回答时优先依据：\n" + snippets)
 
+    # 还原本轮之前已执行的工具结果（ToolMessage），供 prompt 预算与最终 tool_results 使用。
+    tool_results = _tool_results_from_messages(state.get("messages", []))
+    if not tool_results:
+        tool_results = list(state.get("tool_results") or [])
+
     raw_messages = [SystemMessage(content="\n".join(parts))] + list(state.get("messages", []))
     trimmed = trim_to_budget(
         raw_messages,
         context=context,
-        tool_results=state.get("tool_results") or [],
+        tool_results=tool_results,
         max_tokens=MAX_CONTEXT_TOKENS,
     )
     messages = trimmed.messages
     iterations = int(state.get("tool_iterations") or 0)
     tools_on = bool(rt.get("tools_enabled", TOOLS_ENABLED))
+    # 运行时读取上限（不用 from-import 的值拷贝，支持 config 热更新 / monkeypatch）。
+    max_iterations = int(getattr(config, "TOOL_MAX_ITERATIONS", TOOL_MAX_ITERATIONS))
     # 循环超限：降级为无工具回答，避免死循环（DoD：收敛且不崩）。
-    if tools_on and iterations >= TOOL_MAX_ITERATIONS:
+    degraded = tools_on and iterations >= max_iterations
+    if degraded:
         parts.append("工具调用次数已达上限，请直接基于已有信息回答，不要再调用工具。")
         tools_on = False
         trimmed = trim_to_budget(
             [SystemMessage(content="\n".join(parts))] + list(state.get("messages", [])),
             context=context,
-            tool_results=state.get("tool_results") or [],
+            tool_results=tool_results,
             max_tokens=MAX_CONTEXT_TOKENS,
         )
         messages = trimmed.messages
@@ -139,22 +175,29 @@ def generate(state: dict, *, runtime: dict | None = None) -> dict:
     answer = getattr(resp, "content", str(resp)) or ""
     tool_calls = list(getattr(resp, "tool_calls", None) or [])
 
+    # 无工具模式（tools=False / 超限降级）下若模型仍返回 tool_calls：剥掉残留避免
+    # tools_condition 再次进入 tools 分支死循环。配置性无工具（非超限）时重试一次
+    # 无工具调用拿正文（测试桩/部分 provider 首轮带 tool_call 但随后能给出纯文本）。
+    if not tools_on and tool_calls:
+        resp = _strip_tool_calls(resp)
+        if not degraded:
+            clean_messages = list(messages) + [resp]
+            retry = llm.invoke(clean_messages)
+            if getattr(retry, "tool_calls", None):
+                retry = _strip_tool_calls(retry)
+            resp = retry
+        answer = getattr(resp, "content", str(resp)) or ""
+        tool_calls = []
+
     out: dict = {
         "answer": answer,
         "tool_calls": tool_calls,
         "messages": list(state.get("messages", [])) + [resp],
+        "tool_results": tool_results,
         "budget_meta": trimmed.as_meta(),
     }
     if tool_calls:
         out["tool_iterations"] = iterations + 1
-        out["tool_results"] = list(state.get("tool_results") or []) + [{
-            "iteration": iterations + 1,
-            "calls": [{"name": c.get("name", ""), "args": c.get("args", {})} for c in tool_calls],
-        }]
-    if not answer and tool_calls:
-        # 工具调用轮次通常无正文：answer 保持空，SSE 不推送 answer 事件。
-        out.pop("answer", None)
-        out["answer"] = ""
     return out
 
 

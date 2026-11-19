@@ -94,7 +94,13 @@ def extract_candidates(state: dict, *, runtime: dict | None = None) -> list[dict
     llm = rt.get("llm")
     if llm is None:
         return []
-    prompt = _EXTRACT_PROMPT.format(whitelist=json.dumps(MEMORY_WHITELIST, ensure_ascii=False))
+    # MEMORY_WHITELIST 的值是 set（用于 O(1) 查找），json 不支持 —— 序列化前转 list。
+    whitelist_json = json.dumps(
+        {area: sorted(keys) for area, keys in MEMORY_WHITELIST.items()},
+        ensure_ascii=False,
+    )
+    # 模板里含 JSON 示例的大括号，不能用 str.format；用 replace 精确替换占位符。
+    prompt = _EXTRACT_PROMPT.replace("{whitelist}", whitelist_json)
     try:
         raw = _call_llm(llm, [SystemMessage(content=prompt)] + list(state.get("messages", [])))
         candidates = _parse_candidates(raw)
